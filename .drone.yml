@@ -1,0 +1,295 @@
+kind: pipeline
+type: docker
+name: build
+
+workspace:
+  base: /drone
+  path: /drone/src
+
+steps:
+  - name: build image
+    image: docker:dind
+    pull: if-not-exists
+    volumes:
+    - name: dockersock
+      path: /var/run/docker.sock
+    commands:
+      - docker build --rm -t fms-pig-farm-service:${DRONE_COMMIT} . --build-arg GIT_COMMIT=${DRONE_COMMIT} --build-arg GIT_BRANCH=${DRONE_BRANCH}
+  - name: notify build image
+    image: kuperiu/drone-teams
+    pull: if-not-exists
+    settings:
+      webhook:  
+        from_secret: MS_TEAM_WEBHOOK
+    when:
+      status:
+       - failure
+
+volumes:
+- name: dockersock
+  host:
+    path: /var/run/docker.sock
+
+trigger:
+  branch:
+  - develop
+  - main
+  event:
+  - push
+# ---
+# kind: pipeline
+# type: docker
+# name: test
+
+# depends_on:
+#   - build
+
+# workspace:
+#   base: /drone
+#   path: /drone/src
+
+# steps:
+#   - name: delay
+#     image: alpine
+#     pull: if-not-exists
+#     commands:
+#       - sleep 10
+
+#   - name: auth-servive-test
+#     image: fms-pig-farm:${DRONE_COMMIT}
+#     pull: if-not-exists
+#     detach: true
+#     environment:
+#       DATABASE_HOST: test_mongodb
+#       DATABASE_PORT: 27017
+#       DATABASE_USER: admin
+#       DATABASE_PASSWORD: password
+#       DATABASE_NAME: fms_farm_dev
+#       DATABASE_AUTH_NAME: admin
+#       DATABASE_SCHEMA: public
+#       DATABASE_SYNCHRONIZE: false
+#       JWT_SECRET: 74YLbq4%c!wU
+#       JWT_EXPIRATION_TIME: 1800
+#       JWT_REFRESH_TOKEN_SECRET: 7jML9q4-c!s0
+#       JWT_REFRESH_TOKEN_EXPIRATION_TIME: 86400
+#   - name: test
+#     image: hoanghao11/test-runner:1.2
+#     pull: if-not-exists
+#     commands:
+#       - dockerize
+#         -wait tcp://test_mongodb:27017
+#         -wait tcp://auth-servive-test:8000
+#         -timeout 200s
+#         /bin/sh -c
+#         "newman run test/newman/pig-farm.postman_collection.json -e test/newman/env/test.json --bail --reporters cli,junit"
+
+# services:
+#   - name: test_mongodb
+#     image: mongo:4.2
+#     pull: if-not-exists
+#     environment:
+#       MONGO_INITDB_ROOT_USERNAME: admin
+#       MONGO_INITDB_ROOT_PASSWORD: password
+      
+# trigger:
+#   branch:
+#   - develop
+#   - main
+#   event:
+#   - push
+
+---
+kind: pipeline
+type: docker
+name: deploy-develop
+
+depends_on:
+  - build
+
+workspace:
+  base: /drone
+  path: /drone/src
+
+steps:
+  - name: push to registry
+    image: docker:dind
+    pull: if-not-exists
+    volumes:
+    - name: dockersock
+      path: /var/run/docker.sock
+    environment:
+      DOCKER_USERNAME: 
+        from_secret: DOCKER_USERNAME
+      DOCKER_PASSWORD: 
+        from_secret: DOCKER_PASSWORD        
+    commands:
+      - docker login -u $${DOCKER_USERNAME} -p $${DOCKER_PASSWORD}
+      - docker tag fms-pig-farm-service:$${DRONE_COMMIT} greenfeed/fms-pig-farm-service:$${DRONE_BRANCH}
+      - docker push greenfeed/fms-pig-farm-service:$${DRONE_BRANCH}
+
+  - name: redeploy service
+    image: alpine/curl:8.2.1
+    pull: if-not-exists
+    environment:
+      WEBHOOK_REDEPLOY:
+        from_secret: WEBHOOK_REDEPLOY
+      SWARMPIT_TOKEN:
+        from_secret: SWARMPIT_TOKEN
+    commands:
+    - curl -XPOST -k $WEBHOOK_REDEPLOY -H "Authorization:Bearer $${SWARMPIT_TOKEN}"
+  - name: notify build image
+    image: kuperiu/drone-teams
+    pull: if-not-exists
+    settings:
+      webhook:  
+        from_secret: MS_TEAM_WEBHOOK
+    when:
+      status:
+       - failure
+       - success
+trigger:
+  branch:
+  - develop
+  event:
+  - push
+
+volumes:
+- name: dockersock
+  host:
+    path: /var/run/docker.sock
+# ---
+# kind: pipeline
+# type: docker
+# name: build-release
+
+# workspace:
+#   base: /drone
+#   path: /drone/src
+
+# steps:
+#   - name: build image
+#     image: docker:dind
+#     pull: if-not-exists
+#     volumes:
+#     - name: dockersock
+#       path: /var/run/docker.sock
+#     commands:
+#       - docker build --rm -t fms-pig-farm:${DRONE_COMMIT} . --build-arg GIT_COMMIT=${DRONE_COMMIT} --build-arg GIT_BRANCH=${DRONE_BRANCH}
+# volumes:
+# - name: dockersock
+#   host:
+#     path: /var/run/docker.sock
+
+# trigger:
+#   event:
+#     - tag
+# ---
+# kind: pipeline
+# type: docker
+# name: test-release
+
+# depends_on:
+#   - build-release
+
+# workspace:
+#   base: /drone
+#   path: /drone/src
+
+# steps:
+#   - name: delay
+#     image: alpine
+#     pull: if-not-exists
+#     commands:
+#       - sleep 10
+
+#   - name: auth-servive-test
+#     image: fms-pig-farm:${DRONE_COMMIT}
+#     pull: if-not-exists
+#     detach: true
+#     environment:
+#       DATABASE_HOST: test_mongodb
+#       DATABASE_PORT: 27017
+#       DATABASE_USER: admin
+#       DATABASE_PASSWORD: password
+#       DATABASE_NAME: fms_farm_dev
+#       DATABASE_AUTH_NAME: admin
+#       DATABASE_SCHEMA: public
+#       DATABASE_SYNCHRONIZE: false
+#       JWT_SECRET: 74YLbq4%c!wU
+#       JWT_EXPIRATION_TIME: 1800
+#       JWT_REFRESH_TOKEN_SECRET: 7jML9q4-c!s0
+#       JWT_REFRESH_TOKEN_EXPIRATION_TIME: 86400
+#   - name: test
+#     image: hoanghao11/test-runner:1.2
+#     pull: if-not-exists
+#     commands:
+#       - dockerize
+#         -wait tcp://test_mongodb:27017
+#         -wait tcp://auth-servive-test:8000
+#         -timeout 200s
+#         /bin/sh -c
+#         "newman run test/newman/pig-farm.postman_collection.json -e test/newman/env/test.json --bail --reporters cli,junit"
+
+# services:
+#   - name: test_mongodb
+#     image: mongo:4.2
+#     pull: if-not-exists
+#     environment:
+#       MONGO_INITDB_ROOT_USERNAME: admin
+#       MONGO_INITDB_ROOT_PASSWORD: password
+      
+# trigger:
+#   event:
+#   - tag
+# ---
+# kind: pipeline
+# name: release
+# type: docker
+
+# depends_on:
+#   - test-release
+
+# workspace:
+#   base: /drone
+#   path: /drone/src
+
+# steps:
+#   - name: push to registry
+#     image: docker:dind
+#     pull: if-not-exists
+#     volumes:
+#     - name: dockersock
+#       path: /var/run/docker.sock
+#     environment:
+#       DOCKER_USERNAME: 
+#         from_secret: DOCKER_USERNAME
+#       DOCKER_PASSWORD: 
+#         from_secret: DOCKER_PASSWORD        
+#     commands:
+#       - docker login -u $${DOCKER_USERNAME} -p $${DOCKER_PASSWORD}
+#       - docker tag fms-pig-farm:${DRONE_COMMIT} greenfeed/fms-pig-farm:$${DRONE_TAG##v}
+#       - docker push greenfeed/fms-pig-farm:$${DRONE_TAG##v} 
+#       - docker rmi fms-pig-farm:${DRONE_COMMIT}
+
+#   - name: forwardforCD
+#     image: greenfeed/git-push:1.0
+#     pull: if-not-exists
+#     settings:
+#       git_username:
+#         from_secret: GITLAB_USERNAME
+#       git_token:
+#         from_secret: GITLAB_TOKEN
+#       git_remote: http://172.16.128.172/fms/infra.git
+#       git_server: '172.16.128.172'
+#       image: greenfeed/fms-pig-farm
+#       docker_compose_path: swarm-prod/stack/backend.stack.yaml
+    
+# volumes:
+# - name: dockersock
+#   host:
+#     path: /var/run/docker.sock
+
+# trigger:
+#   event:
+#     - tag
+
